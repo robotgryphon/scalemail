@@ -1,0 +1,283 @@
+@page "/"
+@using ScaleMail.Core.Model
+@using ScaleMail.Web.Components
+@implements IDisposable
+
+<PageTitle>ScaleMail Designer</PageTitle>
+
+<div class="app">
+    <aside class="side">
+        <h1>ScaleMail Designer</h1>
+        <div class="sub">Build sections, then join them with rings</div>
+
+        <nav class="steps">
+            @foreach (var (n, label) in Steps)
+            {
+                var num = n;
+                <button class="step @(step == num ? "on" : "") @(StepDone(num) ? "done" : "")" disabled="@(num > 1 && doc.Sections.Count == 0)" @onclick="() => GoStep(num)"><span class="num">@num</span>@label</button>
+            }
+        </nav>
+
+        @if (step == 1)
+        {
+            <h2>Import a template image</h2>
+            <div class="drop"><InputFile OnChange="OnFile" accept="image/*" /></div>
+            <div class="btns"><button class="btn" @onclick="LoadSample">Load sample tail</button></div>
+            <div class="hint">The detected scales become a section on the canvas, with the image kept underneath as a reference.</div>
+            <h2>Or start from scratch</h2>
+            <div class="btns"><button class="btn primary" @onclick="() => GoStep(2)">Open the layout canvas →</button></div>
+            <h2>Open a saved project</h2>
+            <div class="drop"><InputFile OnChange="OnProject" accept=".json" /></div>
+        }
+        else if (step == 2)
+        {
+            <div class="btns">
+                <button class="btn @(mode == Mode.Select ? "primary" : "")" @onclick="() => SetMode(Mode.Select)">Select / move</button>
+                <button class="btn @(mode == Mode.Link ? "primary" : "")" @onclick="() => SetMode(Mode.Link)">Link</button>
+                <button class="btn" disabled="@(undo.Count == 0)" @onclick="Undo">↶ Undo</button>
+            </div>
+
+            @if (mode == Mode.Link)
+            {
+                <h2>Link sections with rings</h2>
+                <ol class="stages">
+                    <li class="@(LinkStage == 1 ? "now" : LinkStage > 1 ? "done" : "")">Click the first section @if (linkA is int a1) { <b>· @doc.FindSection(a1)?.Name</b> }</li>
+                    <li class="@(LinkStage == 2 ? "now" : LinkStage > 2 ? "done" : "")">Click the section to join it to (the same one to join its own edges) @if (linkB is int b1) { <b>· @doc.FindSection(b1)?.Name</b> }</li>
+                    <li class="@(LinkStage == 3 ? "now" : "")">Click a dashed spot in the gap to put a ring there, or click one scale on each side. Click a ring to remove it.</li>
+                </ol>
+                @if (LinkStage == 3)
+                {
+                    <div class="hint mono">@RingsBetween() rings between these sections · @candidates.Count open spots</div>
+                    <div class="btns">
+                        <button class="btn" @onclick="FillAllGaps">Ring every open spot</button>
+                        <button class="btn" @onclick="ClearRings">Remove their rings</button>
+                    </div>
+                }
+                <div class="btns">
+                    <button class="btn" disabled="@(linkA is null)" @onclick="ResetLink">Pick another pair</button>
+                    <button class="btn" @onclick="() => SetMode(Mode.Select)">Done</button>
+                </div>
+            }
+            else if (mode == Mode.Edit && EditingSection is { } es)
+            {
+                <h2>Editing scales in “@es.Name”</h2>
+                <div class="btns">
+                    <button class="btn @ET(EditTool.Select)" @onclick="() => editTool = EditTool.Select">Select</button>
+                    <button class="btn @ET(EditTool.Add)" @onclick="() => editTool = EditTool.Add">Add</button>
+                    <button class="btn @ET(EditTool.Delete)" @onclick="() => editTool = EditTool.Delete">Delete</button>
+                    <button class="btn @ET(EditTool.Move)" @onclick="() => editTool = EditTool.Move">Move</button>
+                    <button class="btn @ET(EditTool.Paint)" @onclick="() => editTool = EditTool.Paint">Paint colour</button>
+                </div>
+                <div class="hint">
+                    @switch (editTool)
+                    {
+                        case EditTool.Select: <text>Click a scale to inspect it.</text> break;
+                        case EditTool.Add: <text>Click a dashed slot to continue the lattice, or click empty space to place a scale freely (it snaps to a nearby slot).</text> break;
+                        case EditTool.Delete: <text>Click a scale to remove it, along with any rings on it.</text> break;
+                        case EditTool.Move: <text>Drag a scale to reposition it.</text> break;
+                        case EditTool.Paint: <text>Click or drag across scales. The first scale you press decides whether you paint or erase.</text> break;
+                    }
+                </div>
+                <div class="hint mono">@es.Mesh.Scales.Count scales · @es.Mesh.RowCount rows · @es.Mesh.Scales.Count(s => s.Colored) coloured</div>
+                <div class="btns">
+                    <button class="btn" @onclick="InvertColors">Invert colours</button>
+                    <button class="btn primary" @onclick="() => SetMode(Mode.Select)">Done editing</button>
+                </div>
+            }
+            else
+            {
+                <h2>Toolbox</h2>
+                <div class="hint">Drag a pattern onto the canvas, or press + to place it in the middle of the view.</div>
+                <div class="toolbox">
+                    @foreach (var info in Patterns.All)
+                    {
+                        var i = info;
+                        <div class="tool-row">
+                            <div class="tool-card" draggable="true" data-drag="@i.Kind" @ondragstart="() => dragKind = i.Kind" @ondragend="() => dragKind = null" @ondblclick="() => PlaceAtCenter(i.Kind)">
+                                <svg viewBox="@Preview(i.Kind).viewBox" width="54" height="40" preserveAspectRatio="xMidYMid meet">
+                                    @foreach (var p in Preview(i.Kind).dots) { <circle cx="@p.x" cy="@p.y" r="@Preview(i.Kind).r" /> }
+                                </svg>
+                                <span>@i.Name</span>
+                            </div>
+                            @if (i.LabelA is not null) { <input type="number" min="1" max="40" title="@i.LabelA" value="@Param(i.Kind).a" @onchange="e => SetParam(i.Kind, e.Value, true)" /> } else { <span class="ph"></span> }
+                            @if (i.LabelB is not null) { <input type="number" min="1" max="40" title="@i.LabelB" value="@Param(i.Kind).b" @onchange="e => SetParam(i.Kind, e.Value, false)" /> } else { <span class="ph"></span> }
+                            <button class="btn small" title="Place in the middle of the view" @onclick="() => PlaceAtCenter(i.Kind)">+</button>
+                        </div>
+                    }
+                </div>
+
+                @if (SelectedSection is { } sel)
+                {
+                    <h2>Section</h2>
+                    <div class="inspector">
+                        <div class="row"><label>Name</label><input type="text" class="txt" value="@sel.Name" @onchange="e => { Snapshot(); sel.Name = e.Value?.ToString() ?? sel.Name; }" /></div>
+                        <div class="mono">@sel.Mesh.Scales.Count scales · @sel.Mesh.RowCount rows · @doc.Rings.Count(r => r.A.Section == sel.Id || r.B.Section == sel.Id) rings · @sel.Rotation.ToString("0")°</div>
+                        <div class="btns">
+                            <button class="btn small" @onclick="() => Rotate(-90)">⟲ 90°</button>
+                            <button class="btn small" @onclick="() => Rotate(-15)">⟲ 15°</button>
+                            <button class="btn small" @onclick="() => Rotate(15)">⟳ 15°</button>
+                            <button class="btn small" @onclick="() => Rotate(90)">⟳ 90°</button>
+                        </div>
+                        <div class="btns">
+                            <button class="btn" @onclick="() => SetMode(Mode.Edit)">Edit scales</button>
+                            <button class="btn" @onclick="DuplicateSection">Duplicate</button>
+                            <button class="btn" @onclick="DeleteSection">Delete</button>
+                        </div>
+                        @if (imports.TryGetValue(sel.Id, out var imp))
+                        {
+                            <h2>Detection</h2>
+                            <div class="row"><label>Outline darkness &lt;</label><input type="number" min="20" max="250" @bind="imp.Options.WallThreshold" @bind:after="Redetect" /></div>
+                            <div class="row"><label>Close line gaps (px)</label><input type="number" min="0" max="4" @bind="imp.Options.GapClosing" @bind:after="Redetect" /></div>
+                            <div class="row"><label>Min scale size (× median)</label><input type="number" step="0.05" min="0.05" max="1" @bind="imp.Options.MinAreaFraction" @bind:after="Redetect" /></div>
+                            <div class="row"><label>Scale length (rows)</label><input type="number" step="0.1" min="1" max="8" @bind="imp.Options.LengthInRows" @bind:after="Redetect" /></div>
+                            <div class="hint">Re-detecting discards manual edits and rings of this section.</div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="hint" style="margin-top:14px">Click a section on the canvas to select it. Drag to move it.</div>
+                }
+            }
+
+            <div class="btns" style="margin-top:14px">
+                <button class="btn" @onclick="SaveProject">Save project (.json)</button>
+                <button class="btn primary" @onclick="() => GoStep(3)">Continue: build 3D →</button>
+            </div>
+        }
+        else if (step == 3)
+        {
+            <h2>3D model</h2>
+            <div class="hint mono">@doc.Sections.Count sections · @doc.Sections.Sum(s => s.Mesh.Scales.Count) scales · @doc.Rings.Count rings</div>
+            <div class="row"><label>Scale width (mm)</label><input type="number" step="0.5" min="1" @bind="b3.ScaleWidthMm" /></div>
+            <div class="row"><label>Thickness (mm)</label><input type="number" step="0.1" min="0.1" @bind="b3.ThicknessMm" /></div>
+            <div class="row"><label>Hole Ø (mm)</label><input type="number" step="0.1" min="0.2" @bind="b3.HoleDiameterMm" /></div>
+            <div class="row"><label>Ring wire (mm)</label><input type="number" step="0.1" min="0.2" @bind="b3.RingWireMm" /></div>
+            <div class="hint">Each ring cuts a hole in both scales it joins and passes through them.</div>
+            <div class="btns"><button class="btn primary" disabled="@busy" @onclick="Build3D">Build 3D mesh</button></div>
+
+            <h2>Export</h2>
+            <div class="btns">
+                <button class="btn" disabled="@(tri is null)" @onclick='() => ExportStl(null, "scales")'>STL</button>
+                <button class="btn" disabled="@(tri is null)" @onclick='() => ExportStl(true, "scales_pattern")'>STL pattern only</button>
+                <button class="btn" disabled="@(tri is null)" @onclick='() => ExportStl(false, "scales_base")'>STL base + rings</button>
+                <button class="btn" disabled="@(tri is null)" @onclick="ExportObj">OBJ</button>
+            </div>
+        }
+
+        @if (error is not null) { <div class="err">@error</div> }
+    </aside>
+
+    <section class="main">
+        <div class="tabs">
+            <strong style="padding:8px 14px">@Steps[step - 1].label</strong>
+            <span class="spacer"></span>
+            @if (step == 2)
+            {
+                <label class="check" style="margin:0 8px 8px">view
+                    <select class="sel" @bind="viewMode">
+                        <option value="@ViewMode.Scales">Scales</option>
+                        <option value="@ViewMode.Markers">Markers</option>
+                    </select>
+                </label>
+                @if (imports.Count > 0)
+                {
+                    <label class="check" style="margin:0 8px 8px"><input type="checkbox" @bind="showRef" /> reference
+                        <input type="range" min="0.1" max="1" step="0.05" @bind="refOpacity" @bind:event="oninput" /></label>
+                }
+                <span class="zoombox">
+                    <button class="btn small" @onclick="() => ZoomBy(1 / 1.25)">−</button>
+                    <button class="btn small" @onclick="() => ZoomBy(1.25)">+</button>
+                    <button class="btn small" @onclick="Fit">Fit</button>
+                </span>
+            }
+            @if (step == 3 && tri is not null)
+            {
+                <span class="zoombox">
+                    <button class="btn small" @onclick="() => SetCamera(0.5, 0.2)">Default</button>
+                    <button class="btn small" @onclick="() => SetCamera(0, 0)">Front</button>
+                    <button class="btn small" @onclick="() => SetCamera(Math.PI / 2, 0)">Side</button>
+                    <button class="btn small" @onclick="() => SetCamera(0, Math.PI / 2 - 0.01)">Top</button>
+                </span>
+                <span class="stat">@tri.TriangleCount.ToString("N0") triangles · @SizeText()</span>
+            }
+        </div>
+
+        <div class="stage" @ref="stageEl" @ondragover:preventDefault @ondrop="OnDrop" @onwheel="OnWheel" @onwheel:preventDefault>
+            @if (step == 1)
+            {
+                <div class="empty">Import a template image, start from scratch, or open a project.</div>
+            }
+            else if (step == 2)
+            {
+                <svg @ref="svgEl" class="canvas" viewBox="@ViewBox()" preserveAspectRatio="xMidYMid meet"
+                     @onpointermove="OnPointerMove" @onpointerup="OnPointerUp" @onpointerleave="OnPointerUp">
+                    <defs>
+                        <pattern id="grid" width="100" height="100" patternUnits="userSpaceOnUse">
+                            <path d="M100 0H0V100" fill="none" stroke="#2a2f38" stroke-width="1" vector-effect="non-scaling-stroke" />
+                        </pattern>
+                    </defs>
+                    <rect x="@F(vx)" y="@F(vy)" width="@F(vw)" height="@F(vh)" fill="url(#grid)" @onpointerdown="OnBackgroundDown" @onclick="OnBackgroundClick" />
+
+                    @foreach (var sec in doc.Sections)
+                    {
+                        var s = sec;
+                        bool active = SectionActive(s);
+                        <g transform="translate(@F(s.X) @F(s.Y)) rotate(@F(s.Rotation))" opacity="@(active ? "1" : "0.3")" pointer-events="@(active ? "auto" : "none")">
+                            @if (selectedSection == s.Id && mode != Mode.Edit)
+                            {
+                                var bb = s.LocalBounds(doc.ScaleWidth, doc.ScaleLength);
+                                <rect x="@F(bb.minX - 4)" y="@F(bb.minY - 4)" width="@F(bb.maxX - bb.minX + 8)" height="@F(bb.maxY - bb.minY + 8)" fill="none" stroke="#5aa9ff" stroke-width="1.5" stroke-dasharray="6 4" pointer-events="none" vector-effect="non-scaling-stroke" />
+                            }
+                            <SectionView Sec="s" Lattice="doc" Markers="@(viewMode == ViewMode.Markers)" RefUri="@RefFor(s)" RefOpacity="refOpacity"
+                                         Cursor="@CursorFor(s)" Highlight="@HighlightFor(s)" Down="OnScaleDown" Click="OnScaleClick" Enter="OnScaleEnter" />
+                            @if (mode == Mode.Edit && editSection == s.Id && editTool == EditTool.Add)
+                            {
+                                @foreach (var g in Slots(s))
+                                {
+                                    var slot = g;
+                                    <circle class="ghost" cx="@F(slot.X)" cy="@F(slot.Y - TipOffset(s))" r="5.5" @onclick="() => AddScaleAt(s, slot)" />
+                                }
+                            }
+                        </g>
+                    }
+
+                    @foreach (var ring in doc.Rings)
+                    {
+                        var r = ring;
+                        var p = doc.RingWorld(r);
+                        var ca = doc.ScaleWorldCenter(r.A); var cb = doc.ScaleWorldCenter(r.B);
+                        <g class="ring" @onclick="() => OnRingClick(r)" pointer-events="@(mode == Mode.Link ? "auto" : "none")">
+                            <line x1="@F(ca.X)" y1="@F(ca.Y)" x2="@F(cb.X)" y2="@F(cb.Y)" />
+                            <circle cx="@F(p.X)" cy="@F(p.Y)" r="5.5" />
+                        </g>
+                    }
+
+                    @if (mode == Mode.Link && LinkStage == 3)
+                    {
+                        @foreach (var c in candidates)
+                        {
+                            var cand = c;
+                            <circle class="ghost ring-ghost" cx="@F(cand.World.X)" cy="@F(cand.World.Y)" r="6.5" @onclick="() => AddRingAt(cand)" />
+                        }
+                    }
+                </svg>
+                @if (doc.Sections.Count == 0)
+                {
+                    <div class="empty" style="pointer-events:none">Drag a pattern from the toolbox onto the canvas.</div>
+                }
+            }
+            else if (step == 3)
+            {
+                @if (tri is null)
+                {
+                    <div class="empty">Set the options and press Build 3D mesh. Drag to orbit, scroll to zoom.</div>
+                }
+                else
+                {
+                    <canvas @ref="previewCanvas"></canvas>
+                }
+            }
+        </div>
+    </section>
+</div>

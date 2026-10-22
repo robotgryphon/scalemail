@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "scalemail-web",
+      "runtimeExecutable": "/opt/homebrew/bin/dotnet",
+      "runtimeArgs": ["run", "--project", "src/ScaleMail.Web", "--urls", "http://localhost:5180"],
+      "port": 5180
+    }
+  ]
+}

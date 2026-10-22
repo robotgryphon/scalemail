@@ -1,0 +1,85 @@
+@using ScaleMail.Core.Model
+@using System.Globalization
+@using ScaleLayout = ScaleMail.Core.Model.Layout
+
+<g>
+    @if (RefUri is not null && Sec.RefWidth > 0)
+    {
+        <image href="@RefUri" x="@F(Sec.RefX)" y="@F(Sec.RefY)" width="@F(Sec.RefWidth * Sec.RefScale)" height="@F(Sec.RefHeight * Sec.RefScale)"
+               opacity="@F(RefOpacity)" pointer-events="none" draggable="false" />
+    }
+    @if (Markers)
+    {
+        @foreach (var s in Sec.Mesh.Scales)
+        {
+            var sc = s;
+            <circle class="marker @Cursor" cx="@F(s.Center.X)" cy="@F(s.Center.Y)" r="@F(HitRadius)" fill="transparent"
+                    @onclick="e => Click.InvokeAsync((Sec, sc, e))" @onpointerdown="e => Down.InvokeAsync((Sec, sc, e))" @onpointerenter="e => Enter.InvokeAsync((Sec, sc, e))" />
+            <circle cx="@F(s.Center.X)" cy="@F(s.Center.Y)" r="3.6" fill="@(s.Colored ? "#555a66" : "#ffffff")" stroke="#111" stroke-width="1" pointer-events="none" />
+        }
+    }
+    else
+    {
+        @foreach (var (s, d) in paths)
+        {
+            var sc = s;
+            <path d="@d" class="scale-path @Cursor" fill="@(s.Colored ? "#8c8f99" : "#f5f5f5")"
+                  @onclick="e => Click.InvokeAsync((Sec, sc, e))" @onpointerdown="e => Down.InvokeAsync((Sec, sc, e))" @onpointerenter="e => Enter.InvokeAsync((Sec, sc, e))" />
+        }
+    }
+    @foreach (var id in Highlight)
+    {
+        var h = Sec.Mesh.Find(id);
+        if (h is null) continue;
+        <circle cx="@F(h.Center.X)" cy="@F(h.Center.Y)" r="8" fill="none" stroke="#ffd54a" stroke-width="2.5" pointer-events="none" />
+    }
+</g>
+
+@code {
+    [Parameter, EditorRequired] public Section Sec { get; set; } = default!;
+    [Parameter] public ScaleLayout Lattice { get; set; } = default!;
+    [Parameter] public bool Markers { get; set; }
+    [Parameter] public string? RefUri { get; set; }
+    [Parameter] public double RefOpacity { get; set; } = 1;
+    [Parameter] public string Cursor { get; set; } = "";
+    [Parameter] public IReadOnlyCollection<int> Highlight { get; set; } = Array.Empty<int>();
+    [Parameter] public EventCallback<(Section, Scale, MouseEventArgs)> Down { get; set; }
+    [Parameter] public EventCallback<(Section, Scale, MouseEventArgs)> Click { get; set; }
+    [Parameter] public EventCallback<(Section, Scale, MouseEventArgs)> Enter { get; set; }
+
+    private (int, int, bool, int?, double, string, string) signature;
+    private int pathsRevision = -1, pathsHash;
+    private List<(Scale, string)> paths = new();
+    private double HitRadius => Math.Max(5, Lattice.RowPitch * 0.55);
+
+    private static readonly (double u, double v)[] outline = LinkPlanner.Outline(14);
+    private static string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    protected override void OnParametersSet()
+    {
+        int hash = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(Sec);
+        if (!Markers && (pathsRevision != Sec.Revision || pathsHash != hash))
+        {
+            pathsRevision = Sec.Revision; pathsHash = hash;
+            double w = Lattice.ScaleWidth, len = Lattice.ScaleLength;
+            // Top rows are drawn last so they overlap the rows below, like real scales.
+            paths = Sec.Mesh.Scales.OrderByDescending(s => s.Row).ThenBy(s => s.Col).Select(s =>
+            {
+                double top = s.Tip.Y - len;
+                var sb = new System.Text.StringBuilder();
+                for (int i = 0; i < outline.Length; i++)
+                    sb.Append(i == 0 ? 'M' : 'L').Append(F(s.Center.X + outline[i].u * w / 2)).Append(' ').Append(F(top + outline[i].v * len));
+                return (s, sb.Append('Z').ToString());
+            }).ToList();
+        }
+    }
+
+    protected override bool ShouldRender()
+    {
+        var sig = (System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(Sec), Sec.Revision, Markers, RefUri?.Length, RefOpacity, Cursor + "|" + string.Join(",", Highlight), "");
+        var packed = (sig.Item1, sig.Item2, sig.Item3, sig.Item4, sig.Item5, sig.Item6, sig.Item7);
+        if (packed.Equals(signature)) return false;
+        signature = packed;
+        return true;
+    }
+}

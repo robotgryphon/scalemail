@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ScaleMail.Core/ScaleMail.Core.csproj" />
+    <Project Path="src/ScaleMail.Web/ScaleMail.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ScaleMail.IntegrationTests/ScaleMail.IntegrationTests.csproj" />
+    <Project Path="tests/ScaleMail.Tests/ScaleMail.Tests.csproj" />
+  </Folder>
+</Solution>
